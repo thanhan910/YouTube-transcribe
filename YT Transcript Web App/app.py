@@ -1,34 +1,45 @@
 from flask import Flask, request, render_template, jsonify
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.formatters import TextFormatter
+import whisper
+from pytube import YouTube
+import os
+import re
+import logging
 
+logging.basicConfig(level=logging.INFO)
+model = whisper.load_model("base")
 
 app = Flask(__name__)
 
 
 def extract_video_id(url_or_id):
-    if 'youtube.com' in url_or_id or 'youtu.be' in url_or_id:
+    if "youtube.com" in url_or_id or "youtu.be" in url_or_id:
         # Extract the video ID from the URL
-        if 'v=' in url_or_id:
-            return url_or_id.split('v=')[1].split('&')[0]
-        elif 'youtu.be' in url_or_id:
-            return url_or_id.split('/')[-1]
+        if "v=" in url_or_id:
+            return url_or_id.split("v=")[1].split("&")[0]
+        elif "youtu.be" in url_or_id:
+            return url_or_id.split("/")[-1]
     return url_or_id
 
 
-@app.route('/')
+@app.route("/")
 def index():
-    return render_template('index.html')
+    return render_template("index.html")
 
-@app.route('/api/languages', methods=['POST'])
+
+@app.route("/api/languages", methods=["POST"])
 def get_languages():
     data = request.json
     print(request.json)
-    video_id = data['video_id']
+    video_id = data["video_id"]
     video_id = extract_video_id(video_id)
     try:
         transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-        languages = [{"code": transcript.language_code, "name": transcript.language} for transcript in transcript_list]
+        languages = [
+            {"code": transcript.language_code, "name": transcript.language}
+            for transcript in transcript_list
+        ]
         # for transcript in transcript_list:
         #     # the Transcript object provides metadata properties
         #     # ['fetch', 'is_generated', 'is_translatable', 'language', 'language_code', 'translate', 'translation_languages', 'video_id']
@@ -51,17 +62,68 @@ def get_languages():
     except Exception as e:
         return jsonify(error=str(e)), 400
 
-@app.route('/api/transcript', methods=['POST'])
+
+@app.route("/api/transcript", methods=["POST"])
 def get_transcript():
     data = request.json
-    video_id = data['video_id']
+    video_id = data["video_id"]
     video_id = extract_video_id(video_id)
-    language = data['language']
+    language = data["language"]
     try:
         transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=[language])
         return jsonify(transcript=transcript)
     except Exception as e:
         return jsonify(error=str(e)), 400
 
-if __name__ == '__main__':
+
+@app.route("/api/text/whisper", methods=["POST"])
+def get_video_text_whisper():
+    """
+    Use OpenAI Whisper to transcribe the audio of a YouTube video.
+
+    Credit: https://huggingface.co/spaces/SteveDigital/free-fast-youtube-url-video-to-text-using-openai-whisper
+    """
+
+    data = request.json
+    video_id = data["video_id"]
+    
+    video_id = extract_video_id(video_id)
+    if video_id == "":
+        return jsonify(error="Invalid video ID"), 400
+    url = f"https://www.youtube.com/watch?v={video_id}"
+
+    yt_obj = YouTube(url)
+    video = yt_obj.streams.filter(only_audio=True).first()
+
+    # out_file = video.download(output_path="./local", filename_prefix="local-", filename="local-audio")
+    # Remove local-audio.mp3
+    filename = "local-audio.mp3"
+    os.remove(filename) if os.path.exists(filename) else None
+    out_file = video.download(output_path=".", filename=filename)
+    logging.info(f"Downloaded audio file: {out_file}")
+    if out_file is None:
+        return jsonify(error="Failed to download audio"), 400
+    
+    file_stats = os.stat(out_file)
+    logging.info(f"Size of audio file in Bytes: {file_stats.st_size}")
+
+    file_size_benchmark = 30000000  # 30 MB
+
+    if file_stats.st_size <= file_size_benchmark:
+        base, ext = os.path.splitext(out_file)
+        new_file = base + ".mp3"
+        os.rename(out_file, new_file)
+        a = new_file
+        result = model.transcribe(a)
+        os.remove(new_file) if os.path.exists(new_file) else None
+        os.remove(out_file) if os.path.exists(out_file) else None
+        return jsonify(transcript=result["text"].strip())
+    else:
+        logging.error("File size is too large")
+        os.remove(out_file) if os.path.exists(out_file) else None
+        return jsonify(error="File size is too large"), 400
+
+
+
+if __name__ == "__main__":
     app.run(debug=True)

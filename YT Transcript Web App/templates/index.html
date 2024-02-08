@@ -7,6 +7,7 @@
     <script>
         var player;
         var ytApiReady = false;
+        var currentVideoId = '';
         var currentHighlight = -1;
         var transcriptData = [];
 
@@ -30,8 +31,10 @@
         function createPlayer(videoId) {
             // Check if the player already exists
             if (player && player.loadVideoById) {
-                // Player exists, load the new video ID
-                player.loadVideoById(videoId);
+                // Player exists, load the new video ID if it's different from the current one
+                if (currentVideoId !== videoId) {
+                    player.loadVideoById(videoId);
+                }
             } else if (ytApiReady) {
                 // Player doesn't exist, create a new one
                 player = new YT.Player('player', {
@@ -102,6 +105,8 @@
             const videoQuery = document.getElementById('video_id').value;
             const videoId = extract_video_id(videoQuery);
 
+            currentVideoId = videoId;
+
             createPlayer(videoId); // Initialize the YouTube player with the provided video ID
             
             document.getElementById('player').style.display = 'block'; // Show video player after loading
@@ -132,6 +137,8 @@
             const videoQuery = document.getElementById('video_id').value;
             const videoId = extract_video_id(videoQuery);
 
+            currentVideoId = videoId;
+
             const language = document.getElementById('language').value;
             const response = await fetch('/api/transcript', {
                 method: 'POST',
@@ -153,14 +160,56 @@
             document.getElementById('loading').style.display = 'none'; // Hide loading indicator after loading
         }
 
+
+        async function fetchWhisper() {
+            document.getElementById('loading').style.display = 'block'; // Show loading indicator
+            document.getElementById('transcript').style.display = 'none'; // Hide transcript during loading
+            document.getElementById('language').style.display = 'none'; // Hide select element during loading
+            
+            const videoQuery = document.getElementById('video_id').value;
+            const videoId = extract_video_id(videoQuery);
+
+            currentVideoId = videoId;
+
+            createPlayer(videoId); // Initialize the YouTube player with the provided video ID
+
+            const response = await fetch('/api/text/whisper', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ video_id: videoId }),
+            });
+            if (response.ok) {
+                const data = await response.json();
+                transcriptData = [{ text : data.transcript}];
+                document.getElementById('transcript').innerHTML = data.transcript;
+                document.getElementById('transcript').style.display = 'block'; // Show transcript
+            } else {
+                // Handle error
+                document.getElementById('transcript').innerText = 'Failed to fetch transcript';
+                document.getElementById('transcript').style.display = 'block';
+            }
+            document.getElementById('loading').style.display = 'none'; // Hide loading indicator after loading
+        }
+
+
         function copyToClipboard() {
-            var text = transcriptData.map(item => item.text).join(' ');
+            let text = transcriptData.map(item => item.text).join(' ');
+            if (text === '') {
+                text = document.getElementById('transcript').innerText;
+            }
+            if (text === '') {
+                console.error('No transcript to copy');
+                return;
+            }
             navigator.clipboard.writeText(text).then(function () {
                 console.log('Transcript copied to clipboard');
             }, function (err) {
                 console.error('Failed to copy transcript to clipboard', err);
             });
         }
+
 
     </script>
     <style>
@@ -177,13 +226,14 @@
 </head>
 
 <body>
-    <label for="video_id">YouTube Video ID:</label>
+    <label for="video_id">Enter YouTube video ID/URL:</label>
     <input type="text" id="video_id" name="video_id">
-    <button onclick="fetchLanguages()">Load Languages</button>
+    <button onclick="fetchLanguages()">Load video transcripts</button>
     <br>
     <div id="player" style="white-space: pre-wrap;"></div>
     <select id="language" style="display: none;" onchange="fetchTranscript()"></select>
     <button onclick="copyToClipboard()">Copy Transcript</button>
+    <button onclick="fetchWhisper()">Use OpenAI Whisper</button>
     <div id="loading" style="display: none;">Loading...</div>
     <div id="transcript" style="white-space: pre-wrap;"></div>
 </body>
