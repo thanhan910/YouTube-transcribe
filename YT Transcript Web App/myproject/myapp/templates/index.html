@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>YouTube Transcript Fetcher</title>
+    <script src="https://www.youtube.com/iframe_api"></script>
+    <script>
+        var player;
+        var ytApiReady = false;
+        var currentVideoId = '';
+        var currentHighlight = -1;
+        var transcriptData = [];
+
+        function extract_video_id(url_or_id) {
+            if (url_or_id.includes('youtube.com') || url_or_id.includes('youtu.be')) {
+                // Extract the video ID from the URL
+                if (url_or_id.includes('v=')) {
+                    return url_or_id.split('v=')[1].split('&')[0];
+                } else if (url_or_id.includes('youtu.be')) {
+                    return url_or_id.split('/').pop();
+                }
+            }
+            return url_or_id;
+        }
+
+        // Function called by YouTube IFrame API when API is ready
+        function onYouTubeIframeAPIReady() {
+            ytApiReady = true;
+        }
+
+        function createPlayer(videoId) {
+            // Check if the player already exists
+            if (player && player.loadVideoById) {
+                // Player exists, load the new video ID if it's different from the current one
+                if (currentVideoId !== videoId) {
+                    player.loadVideoById(videoId);
+                }
+            } else if (ytApiReady) {
+                // Player doesn't exist, create a new one
+                player = new YT.Player('player', {
+                    height: '390',
+                    width: '640',
+                    videoId: videoId,
+                    events: {
+                        'onReady': onPlayerReady,
+                        'onStateChange': onPlayerStateChange
+                    }
+                });
+            } else {
+                console.error("YouTube IFrame API is not ready yet.");
+            }
+        }
+
+        function onPlayerReady(event) {
+            // Load transcript related to this video
+            // fetchTranscript();
+            // Or optionally, play video automatically: event.target.playVideo();
+            // synchronize transcript with video playback
+            // synchronizeTranscript();
+        }
+
+        function onPlayerStateChange(event) {
+            if (event.data === YT.PlayerState.PLAYING) {
+                synchronizeTranscript();
+            }
+        }
+
+        function synchronizeTranscript() {
+            // Assuming you have your transcript data with timestamps in a global variable
+            // var transcriptData = []; // This should be populated with your actual transcript data
+            setInterval(function () {
+                if (player && player.getCurrentTime) {
+                    var currentTime = player.getCurrentTime();
+                    transcriptData.forEach((item, index) => {
+                        if (currentTime >= item.start && currentTime < item.start + item.duration) {
+                            highlightSentence(index);
+                        }
+                    });
+                }
+            }, 10); // Check every 10 milliseconds
+        }
+
+        function highlightSentence(index) {
+            // Remove highlighting from all sentences
+            document.querySelectorAll('.transcript-line').forEach(el => {
+                el.classList.remove('highlight');
+            });
+
+            // Highlight the current sentence
+            var currentSentence = document.getElementById(`transcript-line-${index}`);
+            if (currentSentence) {
+                currentSentence.classList.add('highlight');
+            }
+        }
+
+        function jumpTo(time) {
+            if (player && player.seekTo) {
+                player.seekTo(time, true);
+            }
+        }
+
+        async function fetchLanguages() {
+            document.getElementById('player').style.display = 'none'; // Hide video player during loading
+
+            const videoQuery = document.getElementById('video_id').value;
+            const videoId = extract_video_id(videoQuery);
+
+            currentVideoId = videoId;
+
+            createPlayer(videoId); // Initialize the YouTube player with the provided video ID
+            
+            document.getElementById('player').style.display = 'block'; // Show video player after loading
+            
+            const response = await fetch('/api/languages', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ video_id: videoId }),
+            });
+            if (response.ok) {
+                const data = await response.json();
+                const select = document.getElementById('language');
+                select.innerHTML = data.languages.map(lang => `<option value="${lang.code}">${lang.name}</option>`).join('');
+                select.style.display = 'inline'; // Show the select element
+                fetchTranscript(); // Fetch the transcript for the first language automatically
+            } else {
+                // Handle error
+                console.error('Failed to fetch languages');
+            }
+        }
+
+        async function fetchTranscript() {
+            document.getElementById('loading').style.display = 'block'; // Show loading indicator
+            document.getElementById('transcript').style.display = 'none'; // Hide transcript during loading
+
+            const videoQuery = document.getElementById('video_id').value;
+            const videoId = extract_video_id(videoQuery);
+
+            currentVideoId = videoId;
+
+            const language = document.getElementById('language').value;
+            const response = await fetch('/api/transcript', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ video_id: videoId, language: language }),
+            });
+            if (response.ok) {
+                const data = await response.json();
+                transcriptData = data.transcript;
+                document.getElementById('transcript').innerHTML = data.transcript.map((item, index) => `<span class="transcript-line" id="transcript-line-${index}" onclick="jumpTo(${item.start})">${item.text}</span>`).join(' ');
+                document.getElementById('transcript').style.display = 'block'; // Show transcript
+            } else {
+                // Handle error
+                document.getElementById('transcript').innerText = 'Failed to fetch transcript';
+                document.getElementById('transcript').style.display = 'block';
+            }
+            document.getElementById('loading').style.display = 'none'; // Hide loading indicator after loading
+        }
+
+
+        async function fetchWhisper() {
+            document.getElementById('loading').style.display = 'block'; // Show loading indicator
+            document.getElementById('transcript').style.display = 'none'; // Hide transcript during loading
+            document.getElementById('language').style.display = 'none'; // Hide select element during loading
+            
+            const videoQuery = document.getElementById('video_id').value;
+            const videoId = extract_video_id(videoQuery);
+
+            currentVideoId = videoId;
+
+            createPlayer(videoId); // Initialize the YouTube player with the provided video ID
+
+            const response = await fetch('/api/text/whisper', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ video_id: videoId }),
+            });
+            if (response.ok) {
+                const data = await response.json();
+                transcriptData = [{ text : data.transcript}];
+                document.getElementById('transcript').innerHTML = data.transcript;
+                document.getElementById('transcript').style.display = 'block'; // Show transcript
+            } else {
+                // Handle error
+                document.getElementById('transcript').innerText = 'Failed to fetch transcript';
+                document.getElementById('transcript').style.display = 'block';
+            }
+            document.getElementById('loading').style.display = 'none'; // Hide loading indicator after loading
+        }
+
+
+        function copyToClipboard() {
+            let text = transcriptData.map(item => item.text).join(' ');
+            if (text === '') {
+                text = document.getElementById('transcript').innerText;
+            }
+            if (text === '') {
+                console.error('No transcript to copy');
+                return;
+            }
+            navigator.clipboard.writeText(text).then(function () {
+                console.log('Transcript copied to clipboard');
+            }, function (err) {
+                console.error('Failed to copy transcript to clipboard', err);
+            });
+        }
+
+
+    </script>
+    <style>
+        .transcript-line {
+            cursor: pointer;
+            padding: 5px;
+        }
+
+        .highlight {
+            background-color: yellow;
+        }
+    </style>
+
+</head>
+
+<body>
+    <label for="video_id">Enter YouTube video ID/URL:</label>
+    <input type="text" id="video_id" name="video_id">
+    <button onclick="fetchLanguages()">Load video transcripts</button>
+    <br>
+    <div id="player" style="white-space: pre-wrap;"></div>
+    <select id="language" style="display: none;" onchange="fetchTranscript()"></select>
+    <button onclick="copyToClipboard()">Copy Transcript</button>
+    <button onclick="fetchWhisper()">Use OpenAI Whisper</button>
+    <div id="loading" style="display: none;">Loading...</div>
+    <div id="transcript" style="white-space: pre-wrap;"></div>
+</body>
+
+</html>
